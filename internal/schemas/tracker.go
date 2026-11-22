@@ -19,6 +19,7 @@ type Tracker struct {
 	repo  Repository
 	redis *redis.Client
 
+	flushMu sync.Mutex
 	mu      sync.Mutex
 	pending map[string]*models.EventSchema
 }
@@ -64,6 +65,9 @@ func (t *Tracker) Track(ctx context.Context, event *models.Event) error {
 }
 
 func (t *Tracker) Flush(ctx context.Context) (int, error) {
+	t.flushMu.Lock()
+	defer t.flushMu.Unlock()
+
 	t.mu.Lock()
 	pending := t.pending
 	t.pending = map[string]*models.EventSchema{}
@@ -78,6 +82,7 @@ func (t *Tracker) Flush(ctx context.Context) (int, error) {
 		counts[key] = pipe.PFCount(ctx, key)
 	}
 	if _, err := pipe.Exec(ctx); err != nil {
+		t.restore(pending)
 		return 0, err
 	}
 
@@ -86,5 +91,29 @@ func (t *Tracker) Flush(ctx context.Context) (int, error) {
 		s.DistinctValuesCount = int(counts[key].Val())
 		batch = append(batch, s)
 	}
-	return len(batch), t.repo.UpsertBatch(ctx, batch)
+	if err := t.repo.UpsertBatch(ctx, batch); err != nil {
+		t.restore(pending)
+		return 0, err
+	}
+	return len(batch), nil
+}
+
+// restore keeps failed updates for the next flush without replacing observations
+// that arrived while Redis or the database was being called.
+func (t *Tracker) restore(pending map[string]*models.EventSchema) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for key, failed := range pending {
+		if current, ok := t.pending[key]; ok {
+			current.PropertyType = mergeType(current.PropertyType, failed.PropertyType)
+			if failed.FirstSeen.Before(current.FirstSeen) {
+				current.FirstSeen = failed.FirstSeen
+			}
+			if failed.LastSeen.After(current.LastSeen) {
+				current.LastSeen = failed.LastSeen
+			}
+		} else {
+			t.pending[key] = failed
+		}
+	}
 }
