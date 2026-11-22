@@ -19,6 +19,17 @@ docker compose up -d --build
 Caddy serves the dashboard and the API on the same origin with automatic HTTPS.
 Migrations run automatically when the API or worker starts.
 
+Set optional tuning values in `.env` or export them before running Compose; see
+[.env.example](.env.example). These include database pool sizes, NATS stream settings,
+API rate limits, cache TTLs, worker concurrency, processing intervals, event retention,
+and `WEBHOOK_SECRET` for signed webhooks. Run `docker compose up -d` after changing
+these values to recreate affected containers.
+
+Production Compose uses internal database, NATS, and Redis addresses and fixes the
+API port at `8080` for Caddy. `DATABASE_URL`, `NATS_URL`, `REDIS_URL`, and `API_PORT`
+in `.env.example` apply to local development; use `POSTGRES_PASSWORD` to configure
+the bundled production database password.
+
 ## Development
 
 ```sh
